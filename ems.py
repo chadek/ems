@@ -10,9 +10,6 @@ import time
 import gpiozero
 
 
-#
-
-
 class EMS:
     # init class loading config file value
     def __init__(self, config_path):
@@ -27,6 +24,9 @@ class EMS:
 
         self.conf["heater"]["off_condition"]["timeout"] = int(
             self.conf["heater"]["off_condition"]["timeout"]
+        )
+        self.conf["heater"]["off_condition"]["max_daily_run"] = float(
+            self.conf["heater"]["off_condition"]["max_daily_run"]
         )
         self.conf["heater"]["off_condition"]["short"]["mean"] = int(
             self.conf["heater"]["off_condition"]["short"]["mean"]
@@ -59,6 +59,8 @@ class EMS:
         # Initially off: initial_value=False
         RELAY_PIN = int(self.conf["heater"]["relay_pin"])
         self.heater = {
+            "heating_time_counter": float(0),
+            "heating_time_reset": datetime.now(),
             "state_timer": int(self.conf["heater"]["state_timer"]),
             "off_condition": self.conf["heater"]["off_condition"],
             "on_condition": self.conf["heater"]["on_condition"],
@@ -67,7 +69,7 @@ class EMS:
             - timedelta(minutes=int(self.conf["heater"]["state_timer"])),
         }
 
-        self.status_timer = datetime.now()
+        self.run_timer = datetime.now().timestamp()
         self.relay = gpiozero.OutputDevice(
             RELAY_PIN, active_high=False, initial_value=False
         )
@@ -194,13 +196,27 @@ class EMS:
     def CheckHeater(self):
         now = datetime.now()
         deadline = now - timedelta(seconds=int(self.heater["off_condition"]["timeout"]))
+
         format = "%Y-%m-%dT%H:%M:%SZ"
         date = [
             datetime.strptime(self.last_battery_measurements["time"], format),
             datetime.strptime(self.last_pv_measurements["time"], format),
             datetime.strptime(self.last_out_measurements["time"], format),
         ]
+
+        # reset heating timer counter
+        if self.heater["heating_time_reset"].day != datetime.today().day:
+            syslog.syslog(
+                syslog.LOG_INFO,
+                "ems: reset max daily heating run counter. Running time: {}".format(
+                    self.heater["heating_time_counter"]
+                ),
+            )
+            self.heater["heating_time_counter"] = float(0)
+            self.heater["heating_time_reset"] = datetime.now()
+
         if self.heater["on"]:
+            # if last grid value to old power off
             if date[0] < deadline or date[1] < deadline or date[2] < deadline:
                 print("Last value too old !!!")
                 print("Disable heater !!!")
@@ -213,6 +229,24 @@ class EMS:
                     ),
                 )
                 return
+
+            # if run more than X hours per stop
+            if (
+                self.heater["off_condition"]["max_daily_run"] * 3600
+                < self.heater["heating_time_counter"]
+            ):
+                self.StopHeater()
+                self.heater["timer"] = datetime.now()
+                print("Max daily run reached, turn off heater")
+                syslog.syslog(
+                    syslog.LOG_INFO,
+                    "ems: Max daily run reached, turning off heater. Running time: {}".format(
+                        self.heater["heating_time_counter"]
+                    ),
+                )
+                return
+
+            # if short condition match, trigger power off
             if (
                 self.heater["off_condition"]["short"]["load_limit"]
                 < self.short_mean_out_measurements["mean_load_watt"]
@@ -230,6 +264,7 @@ class EMS:
                     ),
                 )
                 return
+            # if long condition match, trigger power off
             if (
                 self.heater["off_condition"]["long"]["load_limit"]
                 < self.long_mean_out_measurements["mean_load_watt"]
@@ -252,8 +287,14 @@ class EMS:
                 return
 
         deadline = now - timedelta(minutes=self.heater["state_timer"])
-        # if off more than X minutes we try to start heater
-        if not self.heater["on"] and self.heater["timer"] < deadline:
+
+        # if off more than X minutes we try to start heater and daily run not reached
+        if (
+            not self.heater["on"]
+            and self.heater["timer"] < deadline
+            and self.heater["off_condition"]["max_daily_run"] * 3600
+            > self.heater["heating_time_counter"]
+        ):
             # if last input higher than 26 V and 400w, we start heater
             if (
                 self.last_battery_measurements["last"]
@@ -274,7 +315,6 @@ class EMS:
                 )
                 self.StartHeater()
                 self.heater["timer"] = datetime.now()
-                print(self.heater)
                 return
         # If no condition was match, ensure current config is apply
         if self.heater["on"]:
@@ -283,10 +323,16 @@ class EMS:
             self.StopHeater()
 
     def StartHeater(self):
-        self.relay.on()
+        if not self.heater["on"]:
+            self.run_timer = datetime.now().timestamp()
         self.heater["on"] = True
+        self.relay.on()
 
     def StopHeater(self):
+        if self.heater["on"]:
+            self.heater["heating_time_counter"] += (
+                datetime.now().timestamp() - self.run_timer
+            )
         self.heater["on"] = False
         self.relay.off()
 
@@ -343,7 +389,6 @@ class EMS:
                     syslog.LOG_ERR,
                     "{} inverter polling failed in a raw, process".format(e),
                 )
-            time.sleep(1)
 
 
 if __name__ == "__main__":
