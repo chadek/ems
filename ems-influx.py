@@ -5,7 +5,7 @@ import subprocess
 import syslog
 import json
 from datetime import datetime, timedelta
-import requests
+import influxdb
 import time
 import gpiozero
 
@@ -73,40 +73,20 @@ class EMS:
         self.relay = gpiozero.OutputDevice(
             RELAY_PIN, active_high=False, initial_value=False
         )
-        self.victoriametrics_url = "{}:{}".format(
-            self.conf["victoria"]["url"], self.conf["victoria"]["port"]
+        self.influx_client = influxdb.InfluxDBClient(
+            self.conf["influx"]["host"],
+            self.conf["influx"]["port"],
+            self.conf["influx"]["user"],
+            self.conf["influx"]["password"],
+            self.conf["influx"]["database"],
         )
-
-    def QueryVictoriaMetrics(self, params):
-        url = "{}/api/v1/query".format(self.victoriametrics_url)
-        try:
-            response = requests.get(url, params=params)
-            if response.status_code == 200:
-                # Parse the JSON response
-                result = response.json()
-                return result["data"]["result"][0]["value"]
-            else:
-                syslog.syslog(
-                    syslog.LOG_ERR,
-                    "Failed to fetch data. HTTP Status code: {response.status_code}",
-                )
-        except Exception as e:
-            syslog.syslog(syslog.LOG_ERR, "Error while querying data {}".format(e))
-            raise e
 
     def GetLastBatteryData(self):
         try:
-            result = {}
-            entry = [
-                "battery_DC_V",
-                "battery_charging_current",
-                "battery_discharge_current",
-            ]
-            for item in entry:
-                tmp = self.QueryVictoriaMetrics({"query": item})
-                result[item] = float(tmp[1])
-            result["time"] = tmp[0]
-            self.last_battery_measurements = result
+            result = self.influx_client.query(
+                "SELECT LAST(DC_V), charging_current, discharge_current FROM battery"
+            )
+            self.last_battery_measurements = list(result.get_points())[0]
         except Exception as e:
             syslog.syslog(
                 syslog.LOG_ERR, "Error while getting Battery data {}".format(e)
@@ -114,81 +94,49 @@ class EMS:
             raise e
         return True
 
-    def GetMeanBatteryData(self, range):
+    def GetMeanBatteryData(self, start, end):
         try:
-            result = {}
-            entry = [
-                "battery_DC_V",
-                "battery_charging_current",
-                "battery_discharge_current",
-            ]
-            for item in entry:
-                tmp = self.QueryVictoriaMetrics(
-                    {"query": "avg_over_time({}[{}m])".format(item, range)}
+            result = self.influx_client.query(
+                "SELECT MEAN(*) FROM battery WHERE time >= '{}' AND time <= '{}' GROUP BY * fill(0)".format(
+                    start, end
                 )
-                result[item] = float(tmp[1])
-            result["time"] = tmp[0]
+            )
         except Exception as e:
             syslog.syslog(
                 syslog.LOG_ERR, "Error while getting Battery data {}".format(e)
             )
             raise e
-        return result
+        return list(result.get_points())[0]
 
     def GetLastPVData(self):
         try:
-            result = {}
-            entry = [
-                "pv_DC_V",
-                "pv_A",
-                "pv_W",
-            ]
-            for item in entry:
-                tmp = self.QueryVictoriaMetrics({"query": item})
-                result[item] = float(tmp[1])
-            result["time"] = tmp[0]
-            self.last_pv_measurements = result
+            result = self.influx_client.query("SELECT LAST(DC_V), A, W, Wh FROM pv")
+            self.last_pv_measurements = list(result.get_points())[0]
         except Exception as e:
             syslog.syslog(syslog.LOG_ERR, "Error while getting pv data {}".format(e))
             raise e
         return True
 
-    def GetMeanPVData(self, range):
+    def GetMeanPVData(self, start, end):
         try:
-            result = {}
-            entry = [
-                "pv_DC_V",
-                "pv_A",
-                "pv_W",
-            ]
-            for item in entry:
-                tmp = self.QueryVictoriaMetrics(
-                    {"query": "avg_over_time({}[{}m])".format(item, range)}
+            result = self.influx_client.query(
+                "SELECT MEAN(*) FROM pv WHERE time >= '{}' AND time <= '{}' GROUP BY * fill(0)".format(
+                    start, end
                 )
-                result[item] = float(tmp[1])
-            result["time"] = tmp[0]
+            )
         except Exception as e:
             syslog.syslog(
                 syslog.LOG_ERR, "Error while getting mean PV data {}".format(e)
             )
             raise e
-        return result
+        return list(result.get_points())[0]
 
     def GetLastOutData(self):
         try:
-            result = {}
-            entry = [
-                "out_AC_V",
-                "out_Hz",
-                "out_load_percent",
-                "out_load_va",
-                "out_load_watt",
-            ]
-            for item in entry:
-                tmp = self.QueryVictoriaMetrics({"query": item})
-                result[item] = float(tmp[1])
-            result["time"] = tmp[0]
-            self.last_out_measurements = result
+            result = self.influx_client.query(
+                "SELECT LAST(AC_V), Hz, load_percent, load_va, load_watt, load_watthour FROM out"
+            )
+            self.last_out_measurements = list(result.get_points())[0]
         except Exception as e:
             syslog.syslog(
                 syslog.LOG_ERR, "Error while getting smart grid data {}".format(e)
@@ -196,59 +144,42 @@ class EMS:
             raise e
         return True
 
-    def GetMeanOutData(self, range):
+    def GetMeanOutData(self, start, end):
         try:
-            result = {}
-            entry = [
-                "out_AC_V",
-                "out_Hz",
-                "out_load_percent",
-                "out_load_va",
-                "out_load_watt",
-            ]
-            for item in entry:
-                tmp = self.QueryVictoriaMetrics(
-                    {"query": "avg_over_time({}[{}m])".format(item, range)}
+            result = self.influx_client.query(
+                "SELECT MEAN(*) FROM out WHERE time >= '{}' AND time <= '{}' GROUP BY * fill(0)".format(
+                    start, end
                 )
-                result[item] = float(tmp[1])
-            result["time"] = tmp[0]
+            )
         except Exception as e:
             syslog.syslog(
                 syslog.LOG_ERR, "Error while getting mean smart grid data {}".format(e)
             )
             raise e
-        return result
+        return list(result.get_points())[0]
 
     def GetLastGridData(self):
         try:
-            result = {}
-            entry = ["grid_AC_V", "grid_Hz"]
-            for item in entry:
-                tmp = self.QueryVictoriaMetrics({"query": item})
-                result[item] = float(tmp[1])
-            result["time"] = tmp[0]
-            self.last_grid_measurements = result
+            result = self.influx_client.query("SELECT LAST(AC_V), Hz FROM grid")
+            self.last_grid_measurements = list(result.get_points())[0]
         except Exception as e:
             syslog.syslog(syslog.LOG_ERR, "Error while getting grid data {}".format(e))
             raise e
         return True
 
-    def GetMeanGridData(self, range):
+    def GetMeanGridData(self, start, end):
         try:
-            result = {}
-            entry = ["grid_AC_V", "grid_Hz"]
-            for item in entry:
-                tmp = self.QueryVictoriaMetrics(
-                    {"query": "avg_over_time({}[{}m])".format(item, range)}
+            result = self.influx_client.query(
+                "SELECT MEAN(*) FROM grid WHERE time >= '{}' AND time <= '{}' GROUP BY * fill(0)".format(
+                    start, end
                 )
-                result[item] = float(tmp[1])
-            result["time"] = tmp[0]
+            )
         except Exception as e:
             syslog.syslog(
                 syslog.LOG_ERR, "Error while getting mean grid data {}".format(e)
             )
             raise e
-        return result
+        return list(result.get_points())[0]
 
         # condition :
         # on if :
@@ -266,10 +197,11 @@ class EMS:
         now = datetime.now()
         deadline = now - timedelta(seconds=int(self.heater["off_condition"]["timeout"]))
 
+        format = "%Y-%m-%dT%H:%M:%SZ"
         date = [
-            datetime.fromtimestamp(self.last_battery_measurements["time"]),
-            datetime.fromtimestamp(self.last_pv_measurements["time"]),
-            datetime.fromtimestamp(self.last_out_measurements["time"]),
+            datetime.strptime(self.last_battery_measurements["time"], format),
+            datetime.strptime(self.last_pv_measurements["time"], format),
+            datetime.strptime(self.last_out_measurements["time"], format),
         ]
 
         # reset heating timer counter
@@ -317,9 +249,9 @@ class EMS:
             # if short condition match, trigger power off
             if (
                 self.heater["off_condition"]["short"]["load_limit"]
-                < self.short_mean_out_measurements["out_load_watt"]
+                < self.short_mean_out_measurements["mean_load_watt"]
                 or self.heater["off_condition"]["short"]["battery_voltage_limit"]
-                > self.short_mean_battery_measurements["battery_DC_V"]
+                > self.short_mean_battery_measurements["mean_DC_V"]
             ):
                 self.StopHeater()
                 self.heater["timer"] = datetime.now()
@@ -327,19 +259,19 @@ class EMS:
                 syslog.syslog(
                     syslog.LOG_INFO,
                     "ems: short condition match, turning off heater. Battery {}, Load: {}".format(
-                        self.short_mean_battery_measurements["battery_DC_V"],
-                        self.short_mean_out_measurements["out_load_watt"],
+                        self.short_mean_battery_measurements["mean_DC_V"],
+                        self.short_mean_out_measurements["mean_load_watt"],
                     ),
                 )
                 return
             # if long condition match, trigger power off
             if (
                 self.heater["off_condition"]["long"]["load_limit"]
-                < self.long_mean_out_measurements["out_load_watt"]
+                < self.long_mean_out_measurements["mean_load_watt"]
                 or self.heater["off_condition"]["long"]["battery_voltage_limit"]
-                > self.long_mean_battery_measurements["battery_DC_V"]
+                > self.long_mean_battery_measurements["mean_DC_V"]
                 or self.heater["off_condition"]["long"]["input_power"]
-                > self.long_mean_pv_measurements["pv_W"]
+                > self.long_mean_pv_measurements["mean_W"]
             ):
                 self.StopHeater()
                 self.heater["timer"] = datetime.now()
@@ -347,9 +279,9 @@ class EMS:
                 syslog.syslog(
                     syslog.LOG_INFO,
                     "ems: long condition match, turning off heater. Battery {}, Load: {}, Input_power: {}".format(
-                        self.long_mean_battery_measurements["battery_DC_V"],
-                        self.long_mean_out_measurements["out_load_watt"],
-                        self.long_mean_pv_measurements["pv_W"],
+                        self.long_mean_battery_measurements["mean_DC_V"],
+                        self.long_mean_out_measurements["mean_load_watt"],
+                        self.long_mean_pv_measurements["mean_W"],
                     ),
                 )
                 return
@@ -365,20 +297,20 @@ class EMS:
         ):
             # if last input higher than 26 V and 400w, we start heater
             if (
-                self.last_battery_measurements["battery_DC_V"]
+                self.last_battery_measurements["last"]
                 > self.heater["on_condition"]["battery_voltage"]
-                and self.last_pv_measurements["pv_W"]
+                and self.last_pv_measurements["W"]
                 > self.heater["on_condition"]["input_power"]
-                and self.last_out_measurements["out_load_watt"]
+                and self.last_out_measurements["load_watt"]
                 < self.heater["on_condition"]["output_power_limit"]
             ):
                 print("Start Heater !")
                 syslog.syslog(
                     syslog.LOG_INFO,
                     "ems: start condition match, turning on heater. Battery {}, Input power: {}, Load: {}".format(
-                        self.last_battery_measurements["battery_DC_V"],
-                        self.last_pv_measurements["pv_W"],
-                        self.last_out_measurements["out_load_watt"],
+                        self.last_battery_measurements["last"],
+                        self.last_pv_measurements["W"],
+                        self.last_out_measurements["load_watt"],
                     ),
                 )
                 self.StartHeater()
@@ -414,26 +346,35 @@ class EMS:
                 self.GetLastPVData()
                 self.GetLastOutData()
                 # useless for now self.GetLastGridData()
-
+                format = "%Y-%m-%dT%H:%M:%SZ"
+                now_str = datetime.strftime(now, format)
+                date = [
+                    datetime.strftime(
+                        now
+                        - timedelta(
+                            seconds=int(self.heater["off_condition"]["short"]["mean"])
+                        ),
+                        format,
+                    ),
+                    datetime.strftime(
+                        now
+                        - timedelta(
+                            minutes=int(self.heater["off_condition"]["long"]["mean"])
+                        ),
+                        format,
+                    ),
+                ]
                 self.short_mean_battery_measurements = self.GetMeanBatteryData(
-                    self.heater["off_condition"]["short"]["mean"]
+                    date[0], now_str
                 )
-                self.short_mean_pv_measurements = self.GetMeanPVData(
-                    self.heater["off_condition"]["short"]["mean"]
-                )
-                self.short_mean_out_measurements = self.GetMeanOutData(
-                    self.heater["off_condition"]["short"]["mean"]
-                )
-                # useless for now self.short_mean_grid_measurements = self.GetMeanGridData(self.heater["off_condition"]["short"]["mean"])
+                self.short_mean_pv_measurements = self.GetMeanPVData(date[0], now_str)
+                self.short_mean_out_measurements = self.GetMeanOutData(date[0], now_str)
+                # useless for now self.short_mean_grid_measurements = self.GetMeanGridData(date[0], now_str)
                 self.long_mean_battery_measurements = self.GetMeanBatteryData(
-                    self.heater["off_condition"]["long"]["mean"]
+                    date[1], now_str
                 )
-                self.long_mean_pv_measurements = self.GetMeanPVData(
-                    self.heater["off_condition"]["long"]["mean"]
-                )
-                self.long_mean_out_measurements = self.GetMeanOutData(
-                    self.heater["off_condition"]["long"]["mean"]
-                )
+                self.long_mean_pv_measurements = self.GetMeanPVData(date[1], now_str)
+                self.long_mean_out_measurements = self.GetMeanOutData(date[1], now_str)
                 # useless for now self.long_mean_grid_measurements = self.GetMeanGridData(date[1], now_str)
                 failCount = 0
             except Exception as e:
@@ -448,7 +389,6 @@ class EMS:
                     syslog.LOG_ERR,
                     "{} inverter polling failed in a raw, process".format(e),
                 )
-            time.sleep(2)
 
 
 if __name__ == "__main__":
