@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import requests
 import time
 import gpiozero
+import signal
 
 
 class EMS:
@@ -22,60 +23,110 @@ class EMS:
             syslog.syslog(syslog.LOG_ERR, "Failed to load configuration: {}".format(e))
             raise e
 
-        self.conf["heater"]["off_condition"]["timeout"] = int(
-            self.conf["heater"]["off_condition"]["timeout"]
-        )
-        self.conf["heater"]["off_condition"]["max_daily_run"] = float(
-            self.conf["heater"]["off_condition"]["max_daily_run"]
-        )
-        self.conf["heater"]["off_condition"]["short"]["mean"] = int(
-            self.conf["heater"]["off_condition"]["short"]["mean"]
-        )
-        self.conf["heater"]["off_condition"]["short"]["battery_voltage_limit"] = float(
-            self.conf["heater"]["off_condition"]["short"]["battery_voltage_limit"]
-        )
-        self.conf["heater"]["off_condition"]["short"]["load_limit"] = float(
-            self.conf["heater"]["off_condition"]["short"]["load_limit"]
-        )
-        self.conf["heater"]["off_condition"]["long"]["mean"] = int(
-            self.conf["heater"]["off_condition"]["long"]["mean"]
-        )
-        self.conf["heater"]["off_condition"]["long"]["battery_voltage_limit"] = float(
-            self.conf["heater"]["off_condition"]["long"]["battery_voltage_limit"]
-        )
-        self.conf["heater"]["off_condition"]["long"]["load_limit"] = float(
-            self.conf["heater"]["off_condition"]["long"]["load_limit"]
-        )
-        self.conf["heater"]["off_condition"]["long"]["input_power"] = float(
-            self.conf["heater"]["off_condition"]["long"]["input_power"]
-        )
-        self.conf["heater"]["on_condition"]["battery_voltage"] = float(
-            self.conf["heater"]["on_condition"]["battery_voltage"]
-        )
-        self.conf["heater"]["on_condition"]["input_power"] = int(
-            self.conf["heater"]["on_condition"]["input_power"]
-        )
-        # Triggered by the output pin going high: active_high=True
-        # Initially off: initial_value=False
-        RELAY_PIN = int(self.conf["heater"]["relay_pin"])
-        self.heater = {
-            "heating_time_counter": float(0),
-            "heating_time_reset": datetime.now(),
-            "state_timer": int(self.conf["heater"]["state_timer"]),
-            "off_condition": self.conf["heater"]["off_condition"],
-            "on_condition": self.conf["heater"]["on_condition"],
-            "on": False,
-            "timer": datetime.now()
-            - timedelta(minutes=int(self.conf["heater"]["state_timer"])),
-        }
+        # Register signal handlers
+        signal.signal(signal.SIGTERM, self.graceful_exit)  # for systemd stops
+        signal.signal(signal.SIGINT, self.graceful_exit)  # for Ctrl+C
 
-        self.run_timer = datetime.now().timestamp()
-        self.relay = gpiozero.OutputDevice(
-            RELAY_PIN, active_high=False, initial_value=False
-        )
+        self.conf["mean"]["short"] = int(self.conf["mean"]["short"])
+        self.conf["mean"]["long"] = int(self.conf["mean"]["long"])
+        if "hydro" in self.conf:
+            self.conf["hydro"]["off_condition"]["long"]["battery_voltage_limit"] = (
+                float(
+                    self.conf["hydro"]["off_condition"]["long"]["battery_voltage_limit"]
+                )
+            )
+            self.conf["hydro"]["on_condition"]["battery_voltage"] = float(
+                self.conf["hydro"]["on_condition"]["battery_voltage"]
+            )
+
+            RELAY_HYDRO_PIN = int(self.conf["hydro"]["relay_pin"])
+            self.hydro = {
+                "enable": True,
+                "timer": datetime.now()
+                - timedelta(minutes=int(self.conf["hydro"]["state_timer"])),
+                "state_timer": int(self.conf["hydro"]["state_timer"]),
+                "off_condition": self.conf["hydro"]["off_condition"],
+                "on_condition": self.conf["hydro"]["on_condition"],
+                "on": False,
+            }
+            self.relay_hydro = gpiozero.OutputDevice(
+                RELAY_HYDRO_PIN, active_high=False, initial_value=False
+            )
+        else:
+            self.hydro = {"enable": False}
+
+        if "heater" in self.conf:
+            self.conf["heater"]["off_condition"]["timeout"] = int(
+                self.conf["heater"]["off_condition"]["timeout"]
+            )
+            self.conf["heater"]["off_condition"]["max_daily_run"] = float(
+                self.conf["heater"]["off_condition"]["max_daily_run"]
+            )
+            self.conf["heater"]["off_condition"]["short"]["battery_voltage_limit"] = (
+                float(
+                    self.conf["heater"]["off_condition"]["short"][
+                        "battery_voltage_limit"
+                    ]
+                )
+            )
+            self.conf["heater"]["off_condition"]["short"]["load_limit"] = float(
+                self.conf["heater"]["off_condition"]["short"]["load_limit"]
+            )
+            self.conf["heater"]["off_condition"]["long"]["battery_voltage_limit"] = (
+                float(
+                    self.conf["heater"]["off_condition"]["long"][
+                        "battery_voltage_limit"
+                    ]
+                )
+            )
+            self.conf["heater"]["off_condition"]["long"]["load_limit"] = float(
+                self.conf["heater"]["off_condition"]["long"]["load_limit"]
+            )
+            self.conf["heater"]["off_condition"]["long"]["input_power"] = float(
+                self.conf["heater"]["off_condition"]["long"]["input_power"]
+            )
+            self.conf["heater"]["on_condition"]["battery_voltage"] = float(
+                self.conf["heater"]["on_condition"]["battery_voltage"]
+            )
+            self.conf["heater"]["on_condition"]["input_power"] = int(
+                self.conf["heater"]["on_condition"]["input_power"]
+            )
+            # Triggered by the output pin going high: active_high=True
+            # Initially off: initial_value=False
+            RELAY_HEATER_PIN = int(self.conf["heater"]["relay_pin"])
+            self.heater = {
+                "heating_time_counter": float(0),
+                "heating_time_reset": datetime.now(),
+                "state_timer": int(self.conf["heater"]["state_timer"]),
+                "off_condition": self.conf["heater"]["off_condition"],
+                "on_condition": self.conf["heater"]["on_condition"],
+                "on": False,
+                "timer": datetime.now()
+                - timedelta(minutes=int(self.conf["heater"]["state_timer"])),
+            }
+
+            self.run_timer = datetime.now().timestamp()
+            self.relay_heater = gpiozero.OutputDevice(
+                RELAY_HEATER_PIN, active_high=False, initial_value=False
+            )
+        else:
+            self.heater = {"enable": False}
+
         self.victoriametrics_url = "{}:{}".format(
             self.conf["victoria"]["url"], self.conf["victoria"]["port"]
         )
+
+    def graceful_exit(self, signum, frame):
+        # debug print(f"Signal received at {frame.f_code.co_filename}, line {frame.f_lineno}")
+        syslog.syslog(
+            syslog.LOG_INFO,
+            "Received signal {}, disable hydro and Heater".format(signum),
+        )
+        if self.hydro["enable"] == True:
+            self.StopHydro()
+        if self.heater["enable"] == True:
+            self.StopHeater()
+        exit(0)
 
     def QueryVictoriaMetrics(self, params):
         url = "{}/api/v1/query".format(self.victoriametrics_url)
@@ -88,7 +139,9 @@ class EMS:
             else:
                 syslog.syslog(
                     syslog.LOG_ERR,
-                    "Failed to fetch data. HTTP Status code: {response.status_code}",
+                    "Failed to fetch data. HTTP Status code: {}".format(
+                        response.status_code
+                    ),
                 )
         except Exception as e:
             syslog.syslog(syslog.LOG_ERR, "Error while querying data {}".format(e))
@@ -390,11 +443,92 @@ class EMS:
         else:
             self.StopHeater()
 
+    def CheckHydro(self):
+        now = datetime.now()
+        deadline = now - timedelta(seconds=int(self.hydro["off_condition"]["timeout"]))
+
+        date = [
+            datetime.fromtimestamp(self.last_battery_measurements["time"]),
+            datetime.fromtimestamp(self.last_pv_measurements["time"]),
+            datetime.fromtimestamp(self.last_out_measurements["time"]),
+        ]
+        if self.hydro["on"]:
+            # if last grid value to old power off
+            if date[0] < deadline or date[1] < deadline or date[2] < deadline:
+                print("Last value too old !!!")
+                print("Disable hydro !!!")
+                self.StopHydro()
+                self.hydro["timer"] = datetime.now()
+                syslog.syslog(
+                    syslog.LOG_WARNING,
+                    "ems: deadline condition match, turning off hydro. No data incoming since {}".format(
+                        date
+                    ),
+                )
+                return
+
+            if (
+                self.hydro["off_condition"]["long"]["battery_voltage_limit"]
+                < self.long_mean_battery_measurements["battery_DC_V"]
+            ):
+                self.StopHydro()
+                self.hydro["timer"] = datetime.now()
+                print("long limit, turn off hydro")
+                syslog.syslog(
+                    syslog.LOG_INFO,
+                    "ems: long condition match, turning off hydro. Battery {}, Load: {}, Input_power: {}".format(
+                        self.long_mean_battery_measurements["battery_DC_V"],
+                        self.long_mean_out_measurements["out_load_watt"],
+                        self.long_mean_pv_measurements["pv_W"],
+                    ),
+                )
+                return
+            # talvez parar segun la hora:
+            #
+
+        deadline = now - timedelta(minutes=self.hydro["state_timer"])
+        if not self.hydro["on"] and self.hydro["timer"] < deadline:
+            if (
+                self.last_battery_measurements["battery_DC_V"]
+                < self.hydro["on_condition"]["battery_voltage"]
+                or self.last_pv_measurements["pv_W"]
+                < self.hydro["on_condition"]["input_power"]
+                or self.last_out_measurements["out_load_watt"]
+                > self.hydro["on_condition"]["output_power_limit"]
+            ):
+
+                print("Start Hydro !")
+                syslog.syslog(
+                    syslog.LOG_INFO,
+                    "ems: start condition match, starting hydro. Battery {}, Input power: {}, Load: {}".format(
+                        self.last_battery_measurements["battery_DC_V"],
+                        self.last_pv_measurements["pv_W"],
+                        self.last_out_measurements["out_load_watt"],
+                    ),
+                )
+                self.StartHydro()
+                self.hydro["timer"] = datetime.now()
+                return
+
+        # If no condition was match, ensure current config is apply
+        if self.hydro["on"]:
+            self.StartHydro()
+        else:
+            self.StopHydro()
+
+    def StartHydro(self):
+        self.hydro["on"] = True
+        self.relay_hydro.on()
+
+    def StopHydro(self):
+        self.hydro["on"] = False
+        self.relay_hydro.off()
+
     def StartHeater(self):
         if not self.heater["on"]:
             self.run_timer = datetime.now().timestamp()
         self.heater["on"] = True
-        self.relay.on()
+        self.relay_heater.on()
 
     def StopHeater(self):
         if self.heater["on"]:
@@ -402,7 +536,7 @@ class EMS:
                 datetime.now().timestamp() - self.run_timer
             )
         self.heater["on"] = False
-        self.relay.off()
+        self.relay_heater.off()
 
     def Run(self):
         syslog.syslog(syslog.LOG_INFO, "ems started")
@@ -416,34 +550,39 @@ class EMS:
                 # useless for now self.GetLastGridData()
 
                 self.short_mean_battery_measurements = self.GetMeanBatteryData(
-                    self.heater["off_condition"]["short"]["mean"]
+                    self.conf["mean"]["short"]
                 )
                 self.short_mean_pv_measurements = self.GetMeanPVData(
-                    self.heater["off_condition"]["short"]["mean"]
+                    self.conf["mean"]["short"]
                 )
                 self.short_mean_out_measurements = self.GetMeanOutData(
-                    self.heater["off_condition"]["short"]["mean"]
+                    self.conf["mean"]["short"]
                 )
                 # useless for now self.short_mean_grid_measurements = self.GetMeanGridData(self.heater["off_condition"]["short"]["mean"])
                 self.long_mean_battery_measurements = self.GetMeanBatteryData(
-                    self.heater["off_condition"]["long"]["mean"]
+                    self.conf["mean"]["long"]
                 )
                 self.long_mean_pv_measurements = self.GetMeanPVData(
-                    self.heater["off_condition"]["long"]["mean"]
+                    self.conf["mean"]["long"]
                 )
                 self.long_mean_out_measurements = self.GetMeanOutData(
-                    self.heater["off_condition"]["long"]["mean"]
+                    self.conf["mean"]["long"]
                 )
                 # useless for now self.long_mean_grid_measurements = self.GetMeanGridData(date[1], now_str)
                 failCount = 0
             except Exception as e:
-                syslog.syslog(syslog.LOG_ERR, "Failed to get influx data {}".format(e))
+                syslog.syslog(
+                    syslog.LOG_WARNING, "Failed to get influx data {}".format(e)
+                )
                 failCount += 1
 
             if failCount == 0:
-                self.CheckHeater()
+                if self.heater["enable"] == True:
+                    self.CheckHeater()
+                if self.hydro["enable"] == True:
+                    self.CheckHydro()
 
-            elif failCount == 10:
+            elif failCount >= 10:
                 syslog.syslog(
                     syslog.LOG_ERR,
                     "{} inverter polling failed in a raw, process".format(e),

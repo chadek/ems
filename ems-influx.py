@@ -57,7 +57,7 @@ class EMS:
         )
         # Triggered by the output pin going high: active_high=True
         # Initially off: initial_value=False
-        RELAY_PIN = int(self.conf["heater"]["relay_pin"])
+        RELAY_HEATER_PIN = int(self.conf["heater"]["relay_pin"])
         self.heater = {
             "heating_time_counter": float(0),
             "heating_time_reset": datetime.now(),
@@ -69,9 +69,19 @@ class EMS:
             - timedelta(minutes=int(self.conf["heater"]["state_timer"])),
         }
 
+        RELAY_HYDRO_PIN = int(self.conf["hydro"]["relay_pin"])
+        self.hydro = {
+            "off_condition": self.conf["hydro"]["off_condition"],
+            "on_condition": self.conf["hydro"]["on_condition"],
+            "on": False,
+        }
+
         self.run_timer = datetime.now().timestamp()
-        self.relay = gpiozero.OutputDevice(
-            RELAY_PIN, active_high=False, initial_value=False
+        self.relay_heater = gpiozero.OutputDevice(
+            RELAY_HEATER_PIN, active_high=False, initial_value=False
+        )
+        self.relay_hydro = gpiozero.OutputDevice(
+            RELAY_HYDRO_PIN, active_high=False, initial_value=False
         )
         self.influx_client = influxdb.InfluxDBClient(
             self.conf["influx"]["host"],
@@ -322,11 +332,62 @@ class EMS:
         else:
             self.StopHeater()
 
+    def CheckHydro(self):
+        now = datetime.now()
+        deadline = now - timedelta(seconds=int(self.hydro["off_condition"]["timeout"]))
+
+        format = "%Y-%m-%dT%H:%M:%SZ"
+        date = [
+            datetime.strptime(self.last_battery_measurements["time"], format),
+            datetime.strptime(self.last_pv_measurements["time"], format),
+            datetime.strptime(self.last_out_measurements["time"], format),
+        ]
+        if self.hydro["on"]:
+            # if last grid value to old power off
+            if date[0] < deadline or date[1] < deadline or date[2] < deadline:
+                print("Last value too old !!!")
+                print("Disable hydro !!!")
+                self.StopHydro()
+                self.heater["timer"] = datetime.now()
+                syslog.syslog(
+                    syslog.LOG_WARNING,
+                    "ems: deadline condition match, turning off hydro. No data incoming since {}".format(
+                        date
+                    ),
+                )
+                return
+
+            if (
+                self.hydro["off_condition"]["long"]["battery_voltage_limit"]
+                < self.long_mean_battery_measurements["mean_DC_V"]
+            ):
+                return
+
+            # talvez parar segun la hora:
+            #
+
+        if self.hydro["off"]:
+            # abrir si debajo de X (23,5) V
+            return
+
+        if self.hydro["on"]:
+            self.StartHydro()
+        else:
+            self.StopHydro()
+
+    def StartHydro(self):
+        self.hydro["on"] = True
+        self.relay_hydro.on()
+
+    def StopHydro(self):
+        self.hydro["on"] = False
+        self.relay_hydro.off()
+
     def StartHeater(self):
         if not self.heater["on"]:
             self.run_timer = datetime.now().timestamp()
         self.heater["on"] = True
-        self.relay.on()
+        self.relay_heater.on()
 
     def StopHeater(self):
         if self.heater["on"]:
@@ -334,7 +395,7 @@ class EMS:
                 datetime.now().timestamp() - self.run_timer
             )
         self.heater["on"] = False
-        self.relay.off()
+        self.relay_heater.off()
 
     def Run(self):
         syslog.syslog(syslog.LOG_INFO, "ems started")

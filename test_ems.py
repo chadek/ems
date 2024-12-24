@@ -9,79 +9,94 @@ from gpiozero.pins.mock import MockFactory
 gpiozero.Device.pin_factory = MockFactory()
 
 
+class TestEmsConf(unittest.TestCase):
+    def setUp(self):
+        self.ems = EMS("ems-test-hydro-conf.conf")
+        now = datetime.now().timestamp()
+
+    def tearDown(self):
+        del self.ems
+
+    def test_HeaterDisable(self):
+        self.assertFalse(self.ems.heater["enable"])
+
+    def test_HydroEnable(self):
+        self.assertTrue(self.ems.hydro["enable"])
+
+
 class TestEms(unittest.TestCase):
     def setUp(self):
         self.ems = EMS("ems-test.conf")
-        now = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        now = datetime.now().timestamp()
 
         self.ems.last_battery_measurements = {
             "time": now,
-            "last": 25.09,
-            "charging_current": 6,
-            "discharge_current": 0,
+            "battery_DC_V": 25.09,
+            "battery_charging_current": 6,
+            "battery_discharge_current": 0,
         }
         self.ems.last_pv_measurements = {
             "time": now,
-            "last": 70.5,
-            "A": 15.0,
-            "W": 369,
-            "Wh": None,
+            "pv_DC_V": 70.5,
+            "pv_A": 15.0,
+            "pv_W": 369,
+            "pv_Wh": None,
         }
         self.ems.last_out_measurements = {
             "time": now,
-            "last": 229.9,
-            "Hz": 50.0,
-            "load_percent": 9,
-            "load_va": 298,
-            "load_watt": 209,
-            "load_watthour": None,
+            "out_AC_V": 229.9,
+            "out_Hz": 50.0,
+            "out_load_percent": 9,
+            "ou_load_va": 298,
+            "out_load_watt": 209,
+            "out_load_watthour": None,
         }
 
         self.ems.short_mean_battery_measurements = {
             "time": now,
-            "mean_DC_V": 26.526666666666667,
-            "mean_DC_V_scc": 26.570000000000004,
-            "mean_battery_voltage_to_steady_while_charging": 0.0,
-            "mean_charging_current": 26.666666666666668,
-            "mean_discharge_current": 0.0,
-            "mean_soc": 100.0,
+            "battery_DC_V": 26.526666666666667,
+            "battery_DC_V_scc": 26.570000000000004,
+            "battery_voltage_to_steady_while_charging": 0.0,
+            "battery_charging_current": 26.666666666666668,
+            "battery_discharge_current": 0.0,
+            "battery_soc": 100.0,
         }
         self.ems.short_mean_pv_measurements = {
             "time": now,
-            "mean_A": 29.0,
-            "mean_DC_V": 54.13333333333333,
-            "mean_W": 774.3333333333334,
+            "pv_A": 29.0,
+            "pv_DC_V": 54.13333333333333,
+            "pv_W": 774.3333333333334,
         }
         self.ems.short_mean_out_measurements = {
             "time": now,
-            "mean_AC_V": 230.1,
-            "mean_Hz": 50.0,
-            "mean_load_percent": 3.0,
-            "mean_load_va": 91.66666666666667,
-            "mean_load_watt": 68.66666666666667,
+            "out_AC_V": 230.1,
+            "out_Hz": 50.0,
+            "out_load_percent": 3.0,
+            "out_load_va": 91.66666666666667,
+            "out_load_watt": 68.66666666666667,
         }
         self.ems.long_mean_battery_measurements = {
             "time": now,
-            "mean_DC_V": 26.506547619047616,
-            "mean_DC_V_scc": 26.554999999999982,
-            "mean_battery_voltage_to_steady_while_charging": 0.0,
-            "mean_charging_current": 27.035714285714285,
-            "mean_discharge_current": 0.0,
-            "mean_soc": 100.0,
+            "battery_DC_V": 26.506547619047616,
+            "battery_DC_V_scc": 26.554999999999982,
+            "battery_voltage_to_steady_while_charging": 0.0,
+            "battery_charging_current": 27.035714285714285,
+            "battery_discharge_current": 0.0,
+            "battery_soc": 100.0,
         }
         self.ems.long_mean_pv_measurements = {
             "time": now,
-            "mean_A": 29.80952380952381,
-            "mean_DC_V": 54.16547619047612,
-            "mean_W": 782.2261904761905,
+            "pv_A": 29.80952380952381,
+            "pv_DC_V": 54.16547619047612,
+            "pv_W": 782.2261904761905,
         }
         self.ems.long_mean_out_measurements = {
             "time": now,
-            "mean_AC_V": 229.9547619047619,
-            "mean_Hz": 49.9904761904762,
-            "mean_load_percent": 2.642857142857143,
-            "mean_load_va": 80.98809523809524,
-            "mean_load_watt": 63.98809523809524,
+            "out_AC_V": 229.9547619047619,
+            "out_Hz": 49.9904761904762,
+            "out_load_percent": 2.642857142857143,
+            "out_load_va": 80.98809523809524,
+            "out_load_watt": 63.98809523809524,
         }
 
     def tearDown(self):
